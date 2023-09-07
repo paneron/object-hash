@@ -332,3 +332,18 @@ describe('hash', function() {
     });
   }
 });
+
+describe('subtle hash', function () {
+  it('throws when passed an invalid options', function() {
+    assert.rejects(async function() {
+      await hash.subtle({foo: 'bar'}, {algorithm: 'shalala'});
+    }, 'bad algorithm');
+    assert.rejects(async function() {
+      await hash.subtle({foo: 'bar'}, {encoding: 'base16'});
+    }, 'bad encoding');
+  });
+
+  it('hashes a simple object', async function() {
+    assert.ok(validSha1.test(await hash.subtle({foo: 'bar', bar: 'baz'})), 'hash object');
+  });
+});

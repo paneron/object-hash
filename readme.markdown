@@ -50,6 +50,13 @@ Generate a hash from any object or type.  Defaults to sha1 with hex encoding.
 * `unorderedObjects` {true|false} Sort objects before hashing, i.e. make `hash({ x: 1, y: 2 }) === hash({ y: 2, x: 1 })`. default: true
 * `excludeKeys` optional function for excluding specific key(s) from hashing, if true is returned then exclude from hash. default: include all keys
 
+NOTE: In absence of Node’s `crypto` implementation,
+`hash()` becomes async and behaves as `hash.subtle()`.
+
+## hash.subtle(value, options)
+
+Like `hash()`, but returns a Promise and only supports algorithms supported by SubtleCrypto.
+
 ## hash.sha1(value)
 
 Hash using the sha1 algorithm.

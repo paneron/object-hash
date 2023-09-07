@@ -1,6 +1,33 @@
 'use strict';
 
-var crypto = require('crypto');
+function getMaybeNodeCrypto() {
+  if (typeof require !== 'undefined') {
+    return require('node:crypto');
+  }
+  return undefined;
+}
+
+function _isNode() {
+  return (
+    typeof process === 'object'
+    && typeof process.versions === 'object'
+    && typeof process.versions.node !== 'undefined'
+  );
+}
+
+/**
+ * Node’s crypto may also work in the browser
+ * (if something like browserify polyfills it).
+ */
+var nodeCrypto = getMaybeNodeCrypto();
+
+/**
+ * SubtleCrypto is available both in Node and browser.
+ */
+var subtleCrypto = (_isNode() && nodeCrypto !== undefined)
+  ? nodeCrypto.webcrypto.subtle
+  : globalThis.crypto.subtle;
+
 
 /**
  * Exported function
@@ -33,6 +60,15 @@ function objectHash(object, options){
   return hash(object, options);
 }
 
+
+exports.subtle  = objectHashSubtle;
+
+function objectHashSubtle(object, options) {
+  options = applyDefaults(object, options);
+
+  return subtleCryptoHash(object, options);
+}
+
 /**
  * Exported sugar methods
  *
@@ -54,7 +90,21 @@ exports.keysMD5 = function(object){
 };
 
 // Internals
-var hashes = crypto.getHashes ? crypto.getHashes().slice() : ['sha1', 'md5'];
+
+var subtleHashes = [
+  'sha-1', 'sha-256', 'sha-384', 'sha-512',
+  /* md5 is not in SubtleCrypto */
+];
+var subtleHashesLegacy = [
+  'sha1', 'sha256', 'sha384', 'sha512',
+];
+
+var hashes = nodeCrypto
+  ? nodeCrypto.getHashes
+      ? nodeCrypto.getHashes().slice()
+      : ['sha1', 'md5']
+  : subtleHashes.concat(subtleHashesLegacy);
+
 hashes.push('passthrough');
 var encodings = ['buffer', 'hex', 'binary', 'base64'];
 
@@ -113,11 +163,11 @@ function isNativeFunction(f) {
   return exp.exec(Function.prototype.toString.call(f)) != null;
 }
 
-function hash(object, options) {
+function nodeCryptoHash(object, options) {
   var hashingStream;
 
   if (options.algorithm !== 'passthrough') {
-    hashingStream = crypto.createHash(options.algorithm);
+    hashingStream = nodeCrypto.createHash(options.algorithm);
   } else {
     hashingStream = new PassThrough();
   }
@@ -138,11 +188,87 @@ function hash(object, options) {
   }
 
   var buf = hashingStream.read();
+
+  // NOTE: If buf is a regular string (e.g., in case of passthrough),
+  // below probably does not do what’s intended.
+
   if (options.encoding === 'buffer') {
     return buf;
   }
 
   return buf.toString(options.encoding);
+}
+
+async function subtleCryptoHash(object, options) {
+  var algorithmAliasMap = {
+    sha1: 'sha-1',
+    sha256: 'sha-256',
+    sha384: 'sha-384',
+    sha512: 'sha-512',
+  };
+
+  var encoders = {
+    'hex': function encodeHex (buf) {
+      var hexString = Array.from(
+        new Uint8Array(buf),
+        function (x) {
+          return x.toString(16).padStart(2, '0');
+        },
+      ).join('');
+      return hexString;
+    },
+    'base64': function encodeBase64 (buf) {
+      var binString = Array.from(
+        new Uint8Array(buf),
+        function (x) {
+          return String.fromCodePoint(x)
+        },
+      ).join('');
+      return btoa(binString);
+    },
+    'buffer': function encodeBuffer (buf) {
+      if (typeof Buffer !== 'undefined') {
+        // Assume we’re in Node? Should we check?
+        return new Buffer(buf);
+      } else {
+        return buf;
+      }
+    },
+    'binary': function encodeBinary (buf) {
+      throw new Error("'binary' encoding is not available with SubtleCrypto");
+    },
+  };
+
+  var textEncoder = new TextEncoder();
+
+  var algorithm = subtleHashes.indexOf(options.algorithm) >= 0
+    ? options.algorithm
+    : algorithmAliasMap[options.algorithm];
+
+  if (!algorithm) {
+    throw new Error(`'${algorithm}' algorithm is not available with SubtleCrypto`);
+  }
+
+  var hashingStream = new PassThrough();
+  var hasher = typeHasher(options, hashingStream);
+  hasher.dispatch(object);
+  hashingStream.end('');
+
+  var buf = textEncoder.encode(hashingStream.read());
+
+  var hashBuf = await subtleCrypto.digest(algorithm, buf);
+
+  return encoders[options.encoding](hashBuf);
+}
+
+function hash(object, options) {
+  if (nodeCrypto) {
+    return nodeCryptoHash(object, options);
+  } else if (subtleCrypto) {
+    return subtleCryptoHash(object, options);
+  } else {
+    throw new Error("Neither Node crypto nor SubtleCrypto API is available");
+  }
 }
 
 /**
